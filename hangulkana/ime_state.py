@@ -142,7 +142,7 @@ class ImeWatcher(threading.Thread):
         self.current: ImeState = INACTIVE_INIT
         self.paused = False
         self._refresh = False
-        self._stop = False
+        self._stopping = False  # threading.Thread._stop과 이름이 겹치지 않게
         self._own_pid = kernel32.GetCurrentProcessId()
         self._own_integrity = _token_integrity(kernel32.GetCurrentProcess())
         self._integrity_cache = {}
@@ -152,11 +152,11 @@ class ImeWatcher(threading.Thread):
         self._refresh = True
 
     def stop(self):
-        self._stop = True
+        self._stopping = True
 
     def run(self):
         last = 0.0
-        while not self._stop:
+        while not self._stopping:
             now = time.monotonic()
             if self._refresh or now - last >= self.POLL_SEC:
                 self._refresh = False
