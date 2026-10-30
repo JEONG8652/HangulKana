@@ -1,8 +1,9 @@
 """HangulKana.exe 빌드 (PyInstaller).
 
-    .venv\\Scripts\\python.exe -X utf8 tools\\build_exe.py
+    .venv\\Scripts\\python.exe -X utf8 tools\\build_exe.py [--dist 폴더]
 
 결과: dist\\HangulKana.exe (파일 하나, 콘솔 창 없음). 중간 파일은 build\\ 에 둔다 (둘 다 .gitignore).
+dist\\HangulKana.exe가 실행 중이면 덮어쓸 수 없으므로 --dist로 다른 폴더를 지정한다.
 빌드만 하고 실행하지 않는다.
 """
 
@@ -26,8 +27,13 @@ def make_icon(path):
 
 
 def main():
+    import argparse
+
     import PyInstaller.__main__
 
+    ap = argparse.ArgumentParser(description="HangulKana.exe 빌드")
+    ap.add_argument("--dist", default=DIST, help="결과 폴더 (기본 dist)")
+    dist = os.path.abspath(ap.parse_args().dist)
     os.makedirs(BUILD, exist_ok=True)
     icon = os.path.join(BUILD, "HangulKana.ico")
     make_icon(icon)
@@ -44,14 +50,14 @@ def main():
         "--hidden-import", "pystray._win32",  # pystray는 백엔드를 실행 중에 고르므로 명시
         "--exclude-module", "tkinter",
         "--exclude-module", "pytest",
-        "--distpath", DIST,
+        "--distpath", dist,
         "--workpath", os.path.join(BUILD, "pyinstaller"),
         "--specpath", BUILD,
         "--noconfirm",
         "--clean",
         "--log-level", "WARN",
     ])
-    exe = os.path.join(DIST, "HangulKana.exe")
+    exe = os.path.join(dist, "HangulKana.exe")
     print(f"완료: {exe} ({os.path.getsize(exe) / 1e6:.1f} MB)")
 
 
