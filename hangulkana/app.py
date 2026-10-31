@@ -209,6 +209,7 @@ WS_POPUP = 0x80000000
 WS_EX_TOPMOST, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT = 0x00000008, 0x00000080, 0x00000020
 WS_EX_LAYERED, WS_EX_NOACTIVATE = 0x00080000, 0x08000000
 WM_DESTROY, WM_CLOSE, WM_TIMER, WM_MOUSEACTIVATE = 0x0002, 0x0010, 0x0113, 0x0021
+WM_QUERYENDSESSION, WM_ENDSESSION = 0x0011, 0x0016
 MA_NOACTIVATE = 3
 SW_HIDE, SW_SHOWNOACTIVATE = 0, 4
 SWP_NOSIZE, SWP_NOACTIVATE = 0x0001, 0x0010
@@ -581,6 +582,15 @@ class App:
         self.request_stop("Ctrl+C")
         return True
 
+    def _on_end_session(self, wparam, lparam):
+        """Windows 종료·로그오프 확정(WM_ENDSESSION). 이 처리가 끝나면 프로세스가 강제 종료될 수 있으므로
+        트레이 루프가 끝나기를 기다리지 않고 여기서 훅을 해제한다."""
+        if wparam:
+            self.request_stop("Windows 종료")
+            self.hook.stop()
+            self.hook.join(2)
+        return 0
+
     # ------------------------------------------------------------ 보조 스레드
 
     def _log_pump(self):
@@ -648,6 +658,12 @@ class App:
         )
         name = "HangulKana" if self.args.live else "HangulKana (dry-run)"
         self.icon = pystray.Icon("HangulKana", icons["standby"], name, menu)
+        # pystray(0.19.5) 창은 처리하지 않는 메시지에 0을 돌려준다. WM_QUERYENDSESSION에 0(FALSE)이면
+        # "Windows 종료를 거부"한 것이 되므로 직접 처리한다.
+        handlers = getattr(self.icon, "_message_handlers", None)
+        if isinstance(handlers, dict):
+            handlers[WM_QUERYENDSESSION] = lambda wparam, lparam: 1
+            handlers[WM_ENDSESSION] = self._on_end_session
 
         def updater(icon):
             icon.visible = True

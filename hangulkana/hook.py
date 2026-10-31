@@ -194,6 +194,7 @@ class KeyboardHook(threading.Thread):
     """전용 스레드에 WH_KEYBOARD_LL·WH_MOUSE_LL·포그라운드 WinEvent를 설치하고 메시지 루프를 돈다."""
 
     HEALTH_INTERVAL_MS = 1000
+    REINSTALL_BACKOFF_MS = (3000, 60000)  # 재설치해도 콜백이 안 오면 다음 재설치까지 기다리는 시간 (처음, 최대)
 
     def __init__(self, watcher, dry_run=True, on_emergency=None, preview=False, trace=False,
                  pause_hotkey=None, on_pause=None):
@@ -219,6 +220,8 @@ class KeyboardHook(threading.Thread):
         self._was_active = False
         self._last_fg = 0
         self._last_cb_tick = 0
+        self._reinstalled_tick = 0  # 마지막 재설치 시각 (0 = 재설치한 적 없음)
+        self._backoff_ms = 0
         # 콜백 객체는 GC로 해제되지 않도록 속성으로 붙잡아 둔다
         self._kbd_proc = HOOKPROC(self._keyboard_cb)
         self._mouse_proc = HOOKPROC(self._mouse_cb)
@@ -282,18 +285,34 @@ class KeyboardHook(threading.Thread):
             self._mouse = None
 
     def _health_check(self):
-        """시스템이 시간 초과로 훅을 조용히 제거했는지 확인하고, 그렇다면 재설치한다."""
+        """시스템이 시간 초과로 훅을 조용히 제거했는지 확인하고, 그렇다면 재설치한다.
+
+        게임(안티치트 등)이 입력을 먼저 가로채면 재설치해도 콜백이 오지 않는다. 그때 계속 재설치하면
+        백신이 키로거로 오인할 수 있으므로(실제로 격리된 적 있음) 재설치 간격을 두 배씩 늘린다.
+        콜백이 한 번이라도 오면 처음으로 돌아간다. 콜백과 이 검사는 같은 스레드라 경합이 없다."""
         lii = LASTINPUTINFO()
         lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
         if not user32.GetLastInputInfo(ctypes.byref(lii)):
             return
         lag = (lii.dwTime - self._last_cb_tick) & 0xFFFFFFFF
-        if 2000 < lag < 0x80000000:
-            log.error("입력은 있었으나 훅 콜백이 %dms 동안 호출되지 않음 → 훅 재설치", lag)
-            self._uninstall()
-            self._install()
-            self.engine.reset()
-            self.display = ("", "")
+        if not 2000 < lag < 0x80000000:
+            return
+        first, cap = self.REINSTALL_BACKOFF_MS
+        if self._reinstalled_tick and self._last_cb_tick == self._reinstalled_tick:
+            # 지난 재설치 뒤로 콜백이 한 번도 없었다
+            since = (kernel32.GetTickCount() - self._reinstalled_tick) & 0xFFFFFFFF
+            if since < self._backoff_ms:
+                return
+            self._backoff_ms = min(self._backoff_ms * 2, cap)
+        else:
+            self._backoff_ms = first
+        log.error("입력은 있었으나 훅 콜백이 %dms 동안 호출되지 않음 → 훅 재설치 (계속 안 되면 %d초 뒤 다시)",
+                  lag, self._backoff_ms // 1000)
+        self._uninstall()
+        self._install()
+        self._reinstalled_tick = self._last_cb_tick
+        self.engine.reset()
+        self.display = ("", "")
 
     # ------------------------------------------------------------ 콜백
 
