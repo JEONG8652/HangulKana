@@ -113,6 +113,10 @@ class Engine:
     def reset(self):
         """조합을 비우고 추적을 새로 시작한다 (활성화·포커스 변경 직후)."""
         self.pending: Optional[Jamo] = None  # 대기 중인 초성 (미송신). Shift 여부 포함
+        # 보류 음절 (미송신): 조합이 빈 상태에서 친 오·호·우. 다음 키가 ㅏ·ㅓ면 바로 와·화·워를 보낸다.
+        # 오를 먼저 보내고 백스페이스로 지우면 조합이 비는 순간 트위터(X) 입력창이 조합을 초기화해
+        # 뒤따르는 송신이 망가진다 (2026-11-01). (onset, vowel, dakuten, kana)
+        self.held: Optional[tuple] = None
         self.last: Optional[Syllable] = None  # 복모음 치환용 직전 음절. 조합 끝에 그대로 있을 때만 유지
         self.open_syllable = False  # 직전 입력이 받침을 받을 수 있는 음절인가
         self.composition: List[Char] = []
@@ -122,6 +126,7 @@ class Engine:
         self._reset_on_next = False
 
     def _clear(self):
+        self.held = None
         self.composition = []
         self.hangul = []
         self.last = None
@@ -141,6 +146,9 @@ class Engine:
         대기 초성은 받침이 될 수 있으면 앞 음절의 받침으로 보여 준다 (한국어 IME처럼 가 + ㄴ → 간).
         그 음절(또는 대기 초성 자모)이 "치는 중" 부분이 된다."""
         parts = [u.render() for u in self.hangul]
+        if self.held is not None:
+            onset, vowel, dakuten, _ = self.held
+            return "".join(parts), HangulUnit(onset, vowel, dakuten=dakuten and vowel != "ㅖ").render()
         p = self.pending
         if p is None:
             return "".join(parts), ""
@@ -169,7 +177,21 @@ class Engine:
         if self._reset_on_next:
             self._reset_on_next = False
             self._clear()
-        return getattr(self, "_on_" + ev.kind)(ev)
+        flushed: List[Action] = []
+        if self.held is not None and self._held_compound(ev) is None:
+            if ev.kind == "bs":
+                self.held = None
+                return Result(True)  # 화면에 아무것도 없으므로 키도 삼킨다
+            if ev.kind == "combo":
+                self.held = None  # 수식키가 눌려 있어 로마자를 보낼 수 없다
+            else:
+                flushed = self._flush_held()
+        result = getattr(self, "_on_" + ev.kind)(ev)
+        if not flushed:
+            return result
+        if not result.swallow:
+            return Result(True, flushed + [ResendKey()])
+        return Result(True, flushed + result.actions)
 
     # ------------------------------------------------------------ 키 종류별
 
@@ -187,21 +209,64 @@ class Engine:
     # ------------------------------------------------------------ 대기 초성
 
     def _abandon_pending(self):
-        """클릭·포커스 변경·단축키: 대기 초성을 버린다 (아직 아무것도 보내지 않았다)."""
+        """클릭·포커스 변경·단축키: 대기 초성과 보류 음절을 버린다 (아직 아무것도 보내지 않았다)."""
         self.pending = None
+        self.held = None
+
+    # ------------------------------------------------------------ 보류 음절 (첫 글자 오·호·우)
+
+    @staticmethod
+    def _compounds_from(onset, vowel):
+        return [cv for (v1, _), cv in table.COMPOUND_VOWELS.items()
+                if v1 == vowel and table.syllable(onset, cv) is not None]
+
+    def _should_hold(self, onset, vowel, dakuten, kana) -> bool:
+        """조합이 비어 있고, 이 음절이 다음 모음과 복모음이 될 수 있으면 보류한다."""
+        if self.composition or not self._compounds_from(onset, vowel):
+            return False
+        voiced = dakuten and vowel != "ㅖ"
+        # ゛가 붙는 음절은 복모음 치환 대상이 아니므로(_emit) 보류할 이유가 없다
+        return not (voiced and table.DAKUTEN_MARK in table.voiced(kana))
+
+    def _held_compound(self, ev: Event) -> Optional[str]:
+        """보류 음절과 이 키가 복모음이 되면 그 복모음."""
+        if self.held is None or ev.kind != "jamo" or ev.jamo.kind != "vowel":
+            return None
+        onset, vowel, _, _ = self.held
+        compound = table.COMPOUND_VOWELS.get((vowel, ev.jamo.char))
+        if compound is None or table.syllable(onset, compound) is None:
+            return None
+        return compound
+
+    def _send_syllable(self, onset, vowel, dakuten, kana) -> List[Action]:
+        actions = self._emit(onset, vowel, dakuten, kana)
+        self.hangul.append(HangulUnit(onset, vowel, self._emitted, self._voiced))
+        return actions
+
+    def _flush_held(self) -> List[Action]:
+        onset, vowel, dakuten, kana = self.held
+        self.held = None
+        return self._send_syllable(onset, vowel, dakuten, kana)
 
     # ------------------------------------------------------------ 음절
 
     def _vowel(self, j: Jamo) -> List[Action]:
+        compound = self._held_compound(Event("jamo", j))
+        if compound is not None:
+            # 보류해 둔 오·호·우 + ㅏ·ㅓ: 백스페이스 없이 바로 와·화·워
+            onset, _, dakuten, _ = self.held
+            self.held = None
+            return self._send_syllable(onset, compound, dakuten or j.dakuten, table.syllable(onset, compound).kana)
         if self.pending is not None:
             unit = table.syllable(self.pending.char, j.char)
             if unit is None:
                 return []  # 무시: 대기 자음 유지
             onset, self.pending = self.pending, None
             dakuten = onset.dakuten or j.dakuten
-            actions = self._emit(onset.char, j.char, dakuten, unit.kana)
-            self.hangul.append(HangulUnit(onset.char, j.char, self._emitted, self._voiced))
-            return actions
+            if self._should_hold(onset.char, j.char, dakuten, unit.kana):
+                self.held = (onset.char, j.char, dakuten, unit.kana)
+                return []
+            return self._send_syllable(onset.char, j.char, dakuten, unit.kana)
 
         # last는 직전 키로 송신한 음절일 때만 남아 있으므로, 추적이 무효여도 지우는 것은
         # 방금 보낸 글자뿐이다 (불변 조건 2)

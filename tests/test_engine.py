@@ -64,10 +64,77 @@ def test_pending_onset_backspace_is_swallowed():
 # ---------------------------------------------------------------- 복모음 치환
 
 def test_compound_sends_backspace_then_new_syllable():
-    engine = Engine()
+    # 조합 중간: 오를 보낸 뒤 ㅏ가 오면 지우고 와 (조합에 か가 남아 비지 않는다)
+    engine, _ = run("카")
     engine.handle(classify(ord("D"), False, False))  # ㅇ
     assert engine.handle(classify(ord("H"), False, False)).actions == [Romaji("o")]
     assert engine.handle(classify(ord("K"), False, False)).actions == [Backspace(1), Romaji("wa")]
+
+
+# ---------------------------------------------------------------- 첫 글자 오·호·우 보류 (2026-11-01)
+# 조합이 빈 상태에서 오를 보내고 백스페이스로 지우면 조합이 비어 트위터(X) 입력창이 깨진다.
+
+def _actions(engine, text):
+    return [engine.handle(classify(vk, shift, False)) for vk, shift in keys(text)]
+
+
+@pytest.mark.parametrize("text, romaji, kana", [
+    ("와", "wa", "わ"), ("화", "fa", "ふぁ"), ("워", "wo", "を"),
+])
+def test_first_compound_sends_no_backspace(text, romaji, kana):
+    engine = Engine()
+    results = _actions(engine, text)
+    assert all(r.actions == [] for r in results[:-1])  # 오·호·우까지는 보내지 않는다
+    assert results[-1].actions == [Romaji(romaji)]
+    assert converted(text) == kana
+
+
+def test_watashi():
+    engine = Engine()
+    sent = [a for r in _actions(engine, "와타시") for a in r.actions]
+    assert sent == [Romaji("wa"), Romaji("ta"), Romaji("si")]
+    assert converted("와타시") == "わたし"
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("오", "お"), ("호", "ほ"), ("우", "う"), ("오ㄴ", "おん"), ("오카", "おか"), ("오-", "おー"),
+    ("오1", "お１"), ("우ㅣ", "うぃ"), ("호ㅔ", "ほぇ"), ("오<LEFT>", "お"), ("^오", "お゛"),
+])
+def test_held_syllable_is_sent_before_next_key(text, expected):
+    assert converted(text) == expected
+
+
+def test_held_syllable_flushed_before_term_key():
+    engine = Engine()
+    _actions(engine, "오")
+    assert engine.held is not None
+    assert engine.handle(classify(0x20, False, False)).actions == [Romaji("o"), ResendKey()]
+
+
+def test_held_syllable_backspace_is_swallowed():
+    engine, sim = run("오<BS>")
+    assert engine.held is None and sim.text == "" and engine.display_text() == ""
+
+
+def test_held_syllable_dropped_on_combo_and_click():
+    engine, _ = run("오")
+    assert not engine.handle(classify(ord("C"), False, True)).swallow
+    assert engine.held is None
+    engine, _ = run("오")
+    engine.mouse_click()
+    assert engine.held is None and engine.display_text() == ""
+
+
+def test_held_syllable_display():
+    engine, _ = run("오")
+    assert engine.display_parts() == ("", "오")
+    engine, _ = run("^호")
+    assert engine.display_text() == "호゛"
+
+
+def test_not_held_mid_composition():
+    engine, _ = run("카")
+    assert _actions(engine, "오")[-1].actions == [Romaji("o")]
 
 
 @pytest.mark.parametrize("text, romaji", [
@@ -230,12 +297,14 @@ def test_dakuten_romaji_actions():
 
 
 def test_compound_carries_dakuten():
-    # 오 다음 Shift+ㅏ → お 지우고 わ゛
-    engine = Engine()
+    # 오 다음 Shift+ㅏ → お 지우고 わ゛ (조합 중간)
+    engine, _ = run("카")
     sent = []
     for vk, shift in keys("오^ㅏ"):
         sent += engine.handle(classify(vk, shift, False)).actions
     assert sent == [Romaji("o"), Backspace(1), Romaji("wa"), Text("゛")]
+    # 첫 글자: 보류했다가 백스페이스 없이 わ゛
+    assert [a for r in _actions(Engine(), "오^ㅏ") for a in r.actions] == [Romaji("wa"), Text("゛")]
 
 
 def test_no_compound_after_separate_dakuten():
@@ -362,7 +431,7 @@ def test_onset_sends_nothing(onset):
 def test_onset_then_vowel_sends_no_backspace():
     engine = Engine()
     step(engine, "ㅎ")
-    assert step(engine, "ㅗ")[0].actions == [Romaji("ho")]
+    assert step(engine, "ㅗ")[0].actions == []  # 첫 글자 호는 보류
     step(engine, "ㅅ")
     assert step(engine, "ㅣ")[0].actions == [Romaji("si")]
 
@@ -372,6 +441,7 @@ def test_hoshikawa():
     engine = Engine()
     actions = [a for r in step(engine, "호시카와") for a in r.actions]
     assert actions == [Romaji("ho"), Romaji("si"), Romaji("ka"), Romaji("o"), Backspace(1), Romaji("wa")]
+    assert not any(isinstance(a, Backspace) for a in actions[:4])
     assert converted("호시카와") == "ほしかわ"
 
 
