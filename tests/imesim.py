@@ -5,10 +5,8 @@ engine.py의 불변 조건 1(완결 로마자만 송신)과 2(백스페이스 �
 """
 
 from hangulkana import romaji_table
-from hangulkana.engine import Backspace, Engine, Preview, ResendKey, Romaji, Text
+from hangulkana.engine import Backspace, Engine, ResendKey, Romaji, Text
 from hangulkana.layout import classify
-
-PREVIEW_CHARS = set("abcdefghijklmnopqrstuvwxyz")  # 조합에 남은 미완성 로마자
 
 # 두벌식 자모 → (VK, Shift)
 _JAMO_KEYS = {
@@ -122,15 +120,7 @@ class ImeSim:
             return
         self.swallowed += 1
         for act in result.actions:
-            if isinstance(act, (Romaji, Text)):
-                # 미리보기 로마자가 남은 채 다음 글자를 보내면 MS IME가 이어 붙여 다른 가나가 된다
-                assert not (self.composition and self.composition[-1] in PREVIEW_CHARS), self.composition
-            if isinstance(act, Preview):
-                assert act.letter in romaji_table.PREVIEW_LETTER.values(), act.letter
-                if self.converting:
-                    self._commit()
-                self.composition.append(act.letter)  # 화면에는 ｋ처럼 보인다
-            elif isinstance(act, Romaji):
+            if isinstance(act, Romaji):
                 # 불변 조건 1: 완결된 가나 단위만 보낸다
                 assert act.text in romaji_table.ROMAJI_TO_KANA, act.text
                 if self.converting:

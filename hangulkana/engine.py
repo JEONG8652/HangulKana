@@ -7,7 +7,7 @@
 
 불변 조건 (모든 코드와 테스트가 지킨다)
 1. MS IME에 미완성 로마자를 남기지 않는다. 보내는 로마자는 항상 완결된 가나 단위(ga, kyo, ltu, nn 등)라서,
-   숫자·기호 키를 그대로 통과시켜도 조합 문자열 1글자에 1:1로 대응한다. (초성 미리보기 글자는 다음 송신 전에 지운다)
+   숫자·기호 키를 그대로 통과시켜도 조합 문자열 1글자에 1:1로 대응한다.
 2. 엔진이 보내는 백스페이스 수는 엔진이 추적 중이며 아직 남아 있는 조합 글자 수를 넘지 않는다.
    어기면 이미 확정된 문서 내용이 지워진다.
 3. 변환기가 보낸 입력(주입 이벤트)은 훅에서 다시 처리하지 않는다 (hook.py).
@@ -38,13 +38,7 @@ class Text(NamedTuple):
     text: str
 
 
-class Preview(NamedTuple):
-    """초성 미리보기용 로마자 한 글자. 다음 송신 전에 반드시 백스페이스로 지운다."""
-
-    letter: str
-
-
-Action = Union[Romaji, Backspace, ResendKey, Text, Preview]
+Action = Union[Romaji, Backspace, ResendKey, Text]
 
 
 @dataclass
@@ -111,10 +105,7 @@ class HangulUnit:
 
 
 class Engine:
-    def __init__(self, preview: bool = False):
-        """preview: 대기 중인 초성을 조합 문자열에 로마자 한 글자(ㅋ → ｋ)로 미리 보여 준다.
-        모음이 오면 그 글자를 백스페이스로 지우고 음절을 보낸다."""
-        self.preview = preview
+    def __init__(self):
         self.reset()
 
     # ------------------------------------------------------------ 상태
@@ -189,36 +180,14 @@ class Engine:
             self._clear()
         if j.kind == "consonant":
             actions = self._commit_batchim()
-            return Result(True, actions + self._set_pending(j))
+            self.pending = j  # 모음이 올 때까지 아무것도 보내지 않는다 (띄움창에만 보인다)
+            return Result(True, actions)
         return Result(True, self._vowel(j))
 
-    # ------------------------------------------------------------ 대기 초성과 미리보기
-
-    def _shown(self) -> bool:
-        """대기 초성의 미리보기 글자가 조합 끝에 있는가."""
-        return bool(self.composition) and self.composition[-1].source == "pending"
-
-    def _set_pending(self, j: Jamo) -> List[Action]:
-        self.pending = j
-        letter = table.preview_letter(j.char, j.dakuten) if self.preview else None
-        if letter is None:
-            return []
-        self.composition.append(Char(letter, "pending"))
-        return [Preview(letter)]
-
-    def _take_pending(self):
-        """대기 초성을 꺼낸다. 미리보기 글자가 있으면 지우는 백스페이스를 함께 돌려준다."""
-        j, self.pending = self.pending, None
-        if j is None or not self._shown():
-            return j, []
-        self.composition.pop()
-        return j, [Backspace(1)]
+    # ------------------------------------------------------------ 대기 초성
 
     def _abandon_pending(self):
-        """클릭·포커스 변경·단축키: 대기 초성을 버린다. 미리보기 글자는 화면에 남는다
-        (MS IME에서 로마자를 치다 만 글자가 남는 것과 같다). 추적은 이미 무효가 된다."""
-        if self.pending is not None and self._shown():
-            self.composition[-1] = self.composition[-1]._replace(source="pass")
+        """클릭·포커스 변경·단축키: 대기 초성을 버린다 (아직 아무것도 보내지 않았다)."""
         self.pending = None
 
     # ------------------------------------------------------------ 음절
@@ -228,9 +197,9 @@ class Engine:
             unit = table.syllable(self.pending.char, j.char)
             if unit is None:
                 return []  # 무시: 대기 자음 유지
-            onset, actions = self._take_pending()
+            onset, self.pending = self.pending, None
             dakuten = onset.dakuten or j.dakuten
-            actions += self._emit(onset.char, j.char, dakuten, unit.kana)
+            actions = self._emit(onset.char, j.char, dakuten, unit.kana)
             self.hangul.append(HangulUnit(onset.char, j.char, self._emitted, self._voiced))
             return actions
 
@@ -291,8 +260,7 @@ class Engine:
         """대기 자음을 직전 음절의 받침으로 확정한다. 받침이 될 수 없으면 버린다."""
         if self.pending is None:
             return []
-        j, actions = self._take_pending()
-        onset = j.char
+        onset, self.pending = self.pending.char, None
         can_attach = self.open_syllable
         self.last = None
         self.open_syllable = False
@@ -301,10 +269,10 @@ class Engine:
             last.jong = onset  # 띄움창에는 버리는 받침도 친 그대로 보여 준다 (각)
             last.jong_kana = 1 if onset in table.BATCHIM else 0
         if not can_attach or onset not in table.BATCHIM:
-            return actions
+            return []
         unit = table.BATCHIM[onset]
         self.composition.append(Char(unit.kana, "batchim"))
-        return actions + [Romaji(unit.romaji)]
+        return [Romaji(unit.romaji)]
 
     def _with_key(self, actions: List[Action]) -> Result:
         """actions 뒤에 원래 키를 보낸다. 보낼 것이 없으면 그냥 통과."""
@@ -341,9 +309,6 @@ class Engine:
 
     def _on_bs(self, ev: Event) -> Result:
         if self.pending is not None:
-            if self._shown():
-                self._take_pending()
-                return PASS  # 백스페이스가 미리보기 글자를 지운다
             self.pending = None
             return Result(True)  # 화면에 아무것도 없으므로 키도 삼킨다
         if self.converting:
@@ -384,7 +349,6 @@ class Engine:
 
     def _on_combo(self, ev: Event) -> Result:
         # Ctrl·Alt·Win 조합 중에는 로마자를 보내면 단축키가 되므로 대기 자음을 버린다.
-        # 미리보기 글자를 지우는 백스페이스도 Ctrl+BS(단어 삭제)가 될 수 있어 보내지 않는다
         self._abandon_pending()
         self._invalidate()
         return PASS

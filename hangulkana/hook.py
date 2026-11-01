@@ -16,7 +16,7 @@ import threading
 from ctypes import wintypes
 
 from . import layout
-from .engine import Backspace, Engine, Preview, ResendKey, Romaji, Text
+from .engine import Backspace, Engine, ResendKey, Romaji, Text
 
 log = logging.getLogger(__name__)
 
@@ -167,8 +167,8 @@ def build_inputs(actions, shift_held, original):
     body = []
     resend = False
     for act in actions:
-        if isinstance(act, (Romaji, Preview)):
-            for ch in act[0]:
+        if isinstance(act, Romaji):
+            for ch in act.text:
                 vk = ord(ch.upper())
                 body += [_key_input(vk, False), _key_input(vk, True)]
         elif isinstance(act, Backspace):
@@ -196,7 +196,7 @@ class KeyboardHook(threading.Thread):
     HEALTH_INTERVAL_MS = 1000
     REINSTALL_BACKOFF_MS = (3000, 60000)  # 재설치해도 콜백이 안 오면 다음 재설치까지 기다리는 시간 (처음, 최대)
 
-    def __init__(self, watcher, dry_run=True, on_emergency=None, preview=False, trace=False,
+    def __init__(self, watcher, dry_run=True, on_emergency=None, trace=False,
                  pause_hotkey=None, on_pause=None):
         super().__init__(name="HangulKana-Hook", daemon=True)
         self.watcher = watcher
@@ -205,7 +205,7 @@ class KeyboardHook(threading.Thread):
         self.on_emergency = on_emergency
         self.pause_hotkey = pause_hotkey  # (수식키 frozenset, VK) 또는 None (config.parse_hotkey)
         self.on_pause = on_pause
-        self.engine = Engine(preview=preview)
+        self.engine = Engine()
         self.display = ("", "")  # 띄움창이 읽어 가는 (확정, 치는 중) 한글. 튜플 대입만 하므로 락 불필요
         self.logq = queue.SimpleQueue()  # 콜백 → 로그 스레드
         self.installed = threading.Event()

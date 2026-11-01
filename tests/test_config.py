@@ -25,8 +25,8 @@ def test_load_without_create(tmp_path):
 
 def test_save_and_load(tmp_path):
     path = str(tmp_path / "config.toml")
-    config.save(path, Config(overlay=False, preview=False, pause_hotkey="ctrl+shift+f12", log_level="debug"))
-    assert config.load(path) == Config(False, False, "ctrl+shift+f12", "debug")
+    config.save(path, Config(overlay=False, pause_hotkey="ctrl+shift+f12", log_level="debug"))
+    assert config.load(path) == Config(False, "ctrl+shift+f12", "debug")
 
 
 def test_parse_comments_and_unknown_keys():
@@ -36,15 +36,21 @@ def test_parse_comments_and_unknown_keys():
 
 
 @pytest.mark.parametrize("text", [
-    'overlay = "yes"', "overlay = 1", "preview = maybe", 'log_level = "loud"', "이상한 줄",
+    'overlay = "yes"', "overlay = 1", 'log_level = "loud"', "이상한 줄",
     'pause_hotkey = "p"', 'pause_hotkey = "ctrl+alt+??"',
 ])
 def test_bad_values_fall_back_to_defaults(text):
     cfg = config.parse(text)
     assert cfg.warnings
     defaults = Config()
-    assert cfg.overlay == defaults.overlay and cfg.preview == defaults.preview
+    assert cfg.overlay == defaults.overlay
     assert cfg.log_level == "error"
+
+
+def test_removed_preview_key_is_ignored_silently():
+    # 예전 설정 파일에 남은 preview 줄은 경고 없이 무시한다
+    cfg = config.parse("overlay = false\npreview = true\n")
+    assert cfg.overlay is False and not cfg.warnings
 
 
 def test_empty_hotkey_means_none():

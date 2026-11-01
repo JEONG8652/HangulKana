@@ -1,17 +1,15 @@
-"""엔진 테스트: 기본 예시, 복모음·받침·탁점·백스페이스·변환 중·추적·초성 미리보기·띄움창 표시."""
+"""엔진 테스트: 기본 예시, 복모음·받침·탁점·백스페이스·변환 중·추적·대기 초성·띄움창 표시."""
 
 import pytest
 
-from hangulkana.engine import Backspace, Engine, Preview, ResendKey, Result, Romaji, Text
+from hangulkana.engine import Backspace, Engine, ResendKey, Result, Romaji, Text
 from hangulkana.layout import Event, classify
 from imesim import ImeSim, keys, run
 
 
 def converted(text):
-    """입력 뒤 Enter로 확정한 결과. 초성 미리보기를 켜도 결과가 같아야 한다."""
+    """입력 뒤 Enter로 확정한 결과."""
     _, sim = run(text + "<ENTER>")
-    _, sim_preview = run(text + "<ENTER>", Engine(preview=True))
-    assert sim_preview.committed == sim.committed
     return sim.committed
 
 
@@ -335,7 +333,6 @@ def test_ignore_keys_do_not_change_state():
 
 # ---------------------------------------------------------------- 긴 문장 + 불변 조건
 
-@pytest.mark.parametrize("preview", [False, True], ids=["plain", "preview"])
 @pytest.mark.parametrize("text", [
     "와타시와 니혼고오 벤쿄우시테이마스",
     "오와와오와와와",
@@ -344,94 +341,69 @@ def test_ignore_keys_do_not_change_state():
     "가<SPACE>나<SPACE><SPACE><ESC>다<ENTER>",
     "간ㄴㄴ<BS>가-1<LEFT>ㄷ<SPACE>",
 ])
-def test_invariants_hold(text, preview):
+def test_invariants_hold(text):
     # run()이 매 키마다 불변 조건 1·2와 추적 일치를 단언한다
-    run(text.replace(" ", "<SPACE>") + "<ENTER>", Engine(preview=preview))
+    run(text.replace(" ", "<SPACE>") + "<ENTER>")
 
 
-# ---------------------------------------------------------------- 초성 미리보기
+# ---------------------------------------------------------------- 대기 초성 (화면에 보내지 않음)
+# 초성 미리보기는 2026-11-01 제거: 조합이 하나뿐일 때 백스페이스로 비우면 트위터(X) 입력창이
+# 조합을 초기화해 뒤따르는 키가 사라졌다. 초성은 모음이 올 때까지 아무것도 보내지 않는다.
 
 def step(engine, text):
     return [engine.handle(classify(vk, shift, False)) for vk, shift in keys(text)]
 
 
-def test_preview_shows_pending_onset_then_replaces_it():
-    engine = Engine(preview=True)
-    assert step(engine, "ㅊ")[0].actions == [Preview("c")]
-    assert step(engine, "ㅡ")[0].actions == [Backspace(1), Romaji("tsu")]
+@pytest.mark.parametrize("onset", ["ㄱ", "ㅋ", "ㅊ", "ㅎ", "ㅇ", "!ㅋ", "!ㅊ"])
+def test_onset_sends_nothing(onset):
+    assert step(Engine(), onset)[0] == Result(True)
 
 
-def test_preview_screen_contents():
-    engine, sim = run("ㅊ", Engine(preview=True))
-    assert sim.text == "c"  # 화면에는 ｃ
-    engine, sim = run("ㅡㄴ", engine, sim)
-    assert sim.text == "つn"
-    engine, sim = run("ㄱ", engine, sim)  # ㄴ 받침 확정 → ん, 새 초성 ㄱ 미리보기
-    assert sim.text == "つんg"
-    engine, sim = run("<SPACE>", engine, sim)  # 종결 키: 미리보기 글자를 지운 뒤 Space
-    assert sim.text == "つん"
+def test_onset_then_vowel_sends_no_backspace():
+    engine = Engine()
+    step(engine, "ㅎ")
+    assert step(engine, "ㅗ")[0].actions == [Romaji("ho")]
+    step(engine, "ㅅ")
+    assert step(engine, "ㅣ")[0].actions == [Romaji("si")]
 
 
-def test_preview_batchim_sequence():
-    engine = Engine(preview=True)
+def test_hoshikawa():
+    # 2026-11-01 트위터 실기에서 ほsいかわ로 깨졌던 예
+    engine = Engine()
+    actions = [a for r in step(engine, "호시카와") for a in r.actions]
+    assert actions == [Romaji("ho"), Romaji("si"), Romaji("ka"), Romaji("o"), Backspace(1), Romaji("wa")]
+    assert converted("호시카와") == "ほしかわ"
+
+
+def test_batchim_sequence():
+    engine = Engine()
     step(engine, "가")
-    assert step(engine, "ㄴ")[0].actions == [Preview("n")]
-    assert step(engine, "ㄱ")[0].actions == [Backspace(1), Romaji("nn"), Preview("g")]
+    assert step(engine, "ㄴ")[0] == Result(True)
+    assert step(engine, "ㄱ")[0].actions == [Romaji("nn")]
 
 
-def test_preview_kyun_space():
-    # 큔 + Space: きゅn → BS → nn → Space (한글 자모로 미리 보여 주던 방식은 きゅㄴ이 남았다)
-    engine = Engine(preview=True)
-    step(engine, "큐")
-    assert step(engine, "ㄴ")[0].actions == [Preview("n")]
-    assert step(engine, "<SPACE>")[0].actions == [Backspace(1), Romaji("nn"), ResendKey()]
+def test_kyun_space():
+    engine = Engine()
+    step(engine, "큐ㄴ")
+    assert step(engine, "<SPACE>")[0].actions == [Romaji("nn"), ResendKey()]
     assert converted("큔") == "きゅん"
 
 
-def test_preview_ieung_shows_nothing():
-    engine = Engine(preview=True)
-    assert step(engine, "ㅇ")[0].actions == []
-    assert step(engine, "ㅏ")[0].actions == [Romaji("a")]
-
-
-def test_preview_dakuten_letter():
-    engine = Engine(preview=True)
-    assert step(engine, "!ㅋ")[0].actions == [Preview("g")]
-    engine = Engine(preview=True)
-    assert step(engine, "!ㅊ")[0].actions == [Preview("d")]
-
-
-def test_preview_backspace_passes_to_erase_onset():
-    engine, sim = run("가ㄴ", Engine(preview=True))
-    result = engine.handle(classify(0x08, False, False))
-    assert not result.swallow
-    sim.apply(0x08, result)
-    assert sim.text == "が" and engine.pending is None
-
-
-def test_preview_backspace_with_ieung_is_swallowed():
-    engine = Engine(preview=True)
-    step(engine, "ㅇ")
+def test_pending_onset_backspace_after_syllable_is_swallowed():
+    engine, sim = run("가ㄴ")
     assert step(engine, "<BS>")[0] == Result(True)
+    assert engine.pending is None
 
 
-def test_preview_ignored_vowel_keeps_onset():
-    engine, sim = run("ㄷㅑ", Engine(preview=True))
-    assert sim.text == "d" and engine.pending.char == "ㄷ"
-
-
-def test_preview_combo_leaves_onset_on_screen():
-    # Ctrl 조합: 백스페이스가 Ctrl+BS(단어 삭제)가 될 수 있어 지우지 않는다
-    engine, sim = run("가ㄴ", Engine(preview=True))
+def test_combo_drops_pending_onset():
+    engine, _ = run("가ㄴ")
     result = engine.handle(classify(ord("C"), False, True))
     assert not result.swallow and engine.pending is None
-    assert engine.composition[-1].source == "pass"
 
 
-def test_preview_navigation_erases_onset_first():
-    engine, _ = run("ㄷ", Engine(preview=True))
-    result = engine.handle(classify(0x25, False, False))
-    assert result.actions == [Backspace(1), ResendKey()]
+def test_navigation_with_pending_onset_passes():
+    engine, _ = run("ㄷ")
+    assert engine.handle(classify(0x25, False, False)) == Result(False)
 
 
 @pytest.mark.parametrize("text, shown", [
@@ -463,9 +435,8 @@ def test_preview_navigation_erases_onset_first():
     ("가<LEFT>", ""),
 ])
 def test_display_text(text, shown):
-    for preview in (False, True):
-        engine, _ = run(text, Engine(preview=preview))
-        assert engine.display_text() == shown, preview
+    engine, _ = run(text)
+    assert engine.display_text() == shown
 
 
 def test_display_cleared_on_click_and_focus():
@@ -479,6 +450,6 @@ def test_display_cleared_on_click_and_focus():
     assert engine.display_text() == "다"
 
 
-def test_preview_with_shift_dakuten():
-    engine, sim = run("!츠", Engine(preview=True))
+def test_shift_dakuten_onset():
+    engine, sim = run("!츠")
     assert sim.text == "づ"

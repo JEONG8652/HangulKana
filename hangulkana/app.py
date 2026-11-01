@@ -22,7 +22,7 @@ import time
 from ctypes import wintypes
 
 from . import config as config_mod
-from .engine import Backspace, Preview, ResendKey, Romaji, Text
+from .engine import Backspace, ResendKey, Romaji, Text
 from .hook import KeyboardHook
 from .ime_state import ImeWatcher
 
@@ -99,8 +99,6 @@ def describe_actions(actions):
             parts.append(f"BS×{a.count}")
         elif isinstance(a, Text):
             parts.append(f"문자 {a.text}")
-        elif isinstance(a, Preview):
-            parts.append(f"미리보기 {a.letter}")
         elif isinstance(a, ResendKey):
             parts.append("+원래키")
     return " ".join(parts) or "(삼킴)"
@@ -532,8 +530,7 @@ class App:
         trace = args.debug or cfg.log_level == "debug"
         hotkey = config_mod.parse_hotkey(cfg.pause_hotkey) if cfg.pause_hotkey else None
         self.hook = KeyboardHook(self.watcher, dry_run=not args.live, on_emergency=self.request_stop,
-                                 preview=cfg.preview and not args.no_preview, trace=trace,
-                                 pause_hotkey=hotkey, on_pause=self.toggle_pause)
+                                 trace=trace, pause_hotkey=hotkey, on_pause=self.toggle_pause)
         self.overlay = Overlay(lambda: self.hook.display, self.watcher)
         self.overlay.enabled = cfg.overlay and not args.no_overlay
         self.icon = None
@@ -730,7 +727,6 @@ def parse_args(argv=None, frozen=FROZEN):
                     help="N초 후 자동 종료 (0 = 무제한. 기본: 소스 실행 60, 실행 파일 0)")
     ap.add_argument("--no-tray", action="store_true", help="트레이 아이콘 없이 실행")
     ap.add_argument("--debug", action="store_true", help="디버그 로그 (입력 내용이 기록됨)")
-    ap.add_argument("--no-preview", action="store_true", help="대기 중인 초성을 로마자 한 글자(ㅋ → ｋ)로 미리 보여 주지 않는다")
     ap.add_argument("--no-overlay", action="store_true", help="한글 띄움창을 끈 채로 시작한다 (트레이 메뉴에서 다시 켤 수 있음)")
     ap.add_argument("--data-dir", default=None, help="설정·로그 폴더 (기본: 실행 파일 %%APPDATA%%\\HangulKana, 소스 .devdata)")
     args = ap.parse_args(argv)

@@ -15,7 +15,6 @@ LOG_LEVELS = ("error", "warning", "info", "debug")
 @dataclass
 class Config:
     overlay: bool = True  # 한글 띄움창. 트레이 메뉴에서 바꾸면 저장된다
-    preview: bool = True  # 초성 미리보기 (ㅋ → ｋ)
     pause_hotkey: str = "ctrl+alt+p"  # 일시 정지 켜기/끄기. 비우면 없음
     log_level: str = "error"  # error / warning / info / debug (debug는 입력 내용이 기록됨)
     warnings: List[str] = field(default_factory=list, compare=False, repr=False)
@@ -28,9 +27,6 @@ TEMPLATE = """\
 # 한글 띄움창 (트레이 메뉴 "한글 띄움창"으로도 켜고 끌 수 있으며, 그때 이 값이 저장됩니다)
 overlay = {overlay}
 
-# 자음만 쳤을 때 입력 위치에 로마자 한 글자로 미리 보여 주기 (ㅋ → ｋ)
-preview = {preview}
-
 # 일시 정지 켜기/끄기 단축키. 예: "ctrl+alt+p", "ctrl+shift+f12". 빈 문자열("")이면 단축키 없음
 pause_hotkey = "{pause_hotkey}"
 
@@ -38,6 +34,9 @@ pause_hotkey = "{pause_hotkey}"
 # debug는 입력한 내용이 로그 파일에 기록되므로 문제를 조사할 때만 쓰세요.
 log_level = "{log_level}"
 """
+
+# 없앤 설정: 예전 설정 파일에 남아 있어도 경고 없이 무시한다
+_REMOVED_KEYS = {"preview"}  # 초성 미리보기, 2026-11-01 제거
 
 _LINE = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$')
 
@@ -75,6 +74,8 @@ def parse(text: str) -> Config:
             cfg.warnings.append(f"{n}번째 줄을 읽을 수 없습니다: {line.strip()}")
             continue
         key, raw = m.group(1), _strip_comment(m.group(2))
+        if key in _REMOVED_KEYS:
+            continue
         if key not in types:
             cfg.warnings.append(f"모르는 설정 '{key}'는 무시합니다")
             continue
@@ -99,7 +100,7 @@ def parse(text: str) -> Config:
 
 def dump(cfg: Config) -> str:
     return TEMPLATE.format(
-        overlay=str(cfg.overlay).lower(), preview=str(cfg.preview).lower(),
+        overlay=str(cfg.overlay).lower(),
         pause_hotkey=cfg.pause_hotkey, log_level=cfg.log_level)
 
 

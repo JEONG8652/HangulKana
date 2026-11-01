@@ -100,21 +100,6 @@ for _r, _k in ROMAJI_TO_KANA.items():
 _MAX_KANA = max(len(k) for k in _KANA_TO_ROMAJI)
 
 
-# 초성 미리보기: 대기 초성을 조합에 로마자 한 글자로 보여 준다 (MS IME는 ｋ처럼 표시).
-# ㅇ은 소리가 없어 표시하지 않는다. Shift 탁점이면 탁음 글자로 (ㅋ → g)
-PREVIEW_LETTER = {
-    "ㄱ": "g", "ㅋ": "k", "ㄷ": "d", "ㅌ": "t", "ㅂ": "b", "ㅍ": "p", "ㅅ": "s",
-    "ㅈ": "z", "ㅊ": "c", "ㄴ": "n", "ㄹ": "r", "ㅁ": "m", "ㅎ": "h",
-}
-_PREVIEW_VOICED = {"ㅋ": "g", "ㅌ": "d", "ㅍ": "b", "ㅎ": "b", "ㅅ": "z", "ㅊ": "d"}
-
-
-def preview_letter(consonant: str, dakuten: bool = False) -> Optional[str]:
-    if dakuten and consonant in _PREVIEW_VOICED:
-        return _PREVIEW_VOICED[consonant]
-    return PREVIEW_LETTER.get(consonant)
-
-
 def voiced(kana: str) -> str:
     """Shift 탁점: か→が, ちゃ→ぢゃ, う→ゔ, あ→あ゛. 탁점을 붙일 수 없으면 그대로."""
     first = kana[0]
